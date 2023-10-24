@@ -17,7 +17,9 @@ public:
     static std::optional<Qoa> parse(std::istream &);
     static std::optional<Qoa> parse(std::istream &&is) { return parse(is); }
 
-    std::vector<std::uint16_t> audio_frames{};
+    std::vector<std::int16_t> audio_frames{};
+    uint32_t sample_rate{};
+    uint32_t nbr_channels{};
 };
 
 } // namespace qoa
