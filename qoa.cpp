@@ -153,7 +153,7 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
       lms_state.push_back(*std::move(lms));
     }
 
-    assert(frame_hdr->sample_count % 20 == 0);
+    // assert(frame_hdr->sample_count % 20 == 0);
     for (std::uint16_t i = 0; i < frame_hdr->sample_count / 20; ++i) {
       for (std::uint8_t ch = 0; ch < *channel_count; ++ch) {
         std::uint64_t slice{};
@@ -163,38 +163,43 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
 
         slice = util::net_pack(slice);
 
-        std::int16_t scale_factor{};
+        std::uint8_t sf_quant{};
         std::array<std::int16_t, 20> residuals{};
         // scale_factor = slice & 0b0000'1111;
         // slice >>= 4;
         int offset = 4;
-        scale_factor = (slice >> (64 - offset));
+        sf_quant = static_cast<uint8_t>(slice >> (64 - offset));
 
         // [1] Dequantize scale factor.
-        scale_factor = static_cast<std::int16_t>(
-            std::round(std::pow(scale_factor + 1, 2.75f)));
+        int16_t scale_factor = static_cast<std::int16_t>(
+            std::round(std::pow(sf_quant + 1, 2.75f)));
 
         for (auto &residual : residuals) {
           // residual = slice & 0b0000'0111;
           // slice >>= 3;
           offset += 3;
           residual = (slice >> (64 - offset)) & 0b111;
-          // [3] Multiply w/ scale factor, round to nearest, tie away from 0.
+          // [3] Multiply with scale factor, round to nearest, tie away from 0.
           double r_d =
               static_cast<double>(scale_factor * kDequantTable.at(residual));
-          int16_t r = r_d < 0 ? static_cast<int16_t>(std::ceil(r_d - 0.5))
-                              : static_cast<int16_t>(std::floor(r_d + 0.5));
+          int r = r_d < 0 ? static_cast<int>(std::ceil(r_d - 0.5))
+                              : static_cast<int>(std::floor(r_d + 0.5));
 
           // [4] The predicted sample is the sum of history[n] * weight[n]
           // >>= 13.
           auto &lms = lms_state.at(ch);
-          int16_t p = [&] {
+          /*int16_t p = [&] {
             return (lms.history[0] * lms.weights[0] +
                     lms.history[1] * lms.weights[1] +
                     lms.history[2] * lms.weights[2] +
                     lms.history[3] * lms.weights[3]) >>
                    13;
-          }();
+          }();*/
+          int32_t p = 0;
+          for ( int n = 0; n < 4; ++n ) {
+            p += lms.history[n] * lms.weights[n];
+          }
+          p >>= 13;
 
           // [5] The final sample is p + r, clamped to the signed 16-bit range.
           output.push_back(
@@ -202,7 +207,7 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
 
           // [6] The LMS weights are updated using the quantized and
           // scaled residual r, right-shifted by 4 bits.
-          auto delta = r >> 4;
+          int16_t delta = r >> 4;
           for (std::size_t j = 0; j < 4; ++j) {
             lms.weights[j] +=
                 static_cast<std::int16_t>(lms.history[j] < 0 ? -delta : delta);
