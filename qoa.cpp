@@ -129,7 +129,7 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
 
   std::cout << "File contains " << sample_count << " across " << frame_count
             << " frames\n";
-  std::vector<std::int16_t> output;
+  std::array<std::vector<std::int16_t>, 2> output;
   std::optional<std::uint8_t> channel_count{};
   for (std::size_t frame_idx = 0; frame_idx < frame_count; ++frame_idx) {
     auto frame_hdr = FrameHeader::parse(is);
@@ -137,7 +137,6 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
       return std::nullopt;
     }
     last_frame = frame_hdr.value();
-
     if (!channel_count) {
       channel_count = frame_hdr->channel_count;
     } else if (channel_count != frame_hdr->channel_count) {
@@ -183,26 +182,21 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
           double r_d =
               static_cast<double>(scale_factor * kDequantTable.at(residual));
           int r = r_d < 0 ? static_cast<int>(std::ceil(r_d - 0.5))
-                              : static_cast<int>(std::floor(r_d + 0.5));
+                          : static_cast<int>(std::floor(r_d + 0.5));
 
           // [4] The predicted sample is the sum of history[n] * weight[n]
           // >>= 13.
           auto &lms = lms_state.at(ch);
-          /*int16_t p = [&] {
+          int16_t p = [&] {
             return (lms.history[0] * lms.weights[0] +
                     lms.history[1] * lms.weights[1] +
                     lms.history[2] * lms.weights[2] +
                     lms.history[3] * lms.weights[3]) >>
                    13;
-          }();*/
-          int32_t p = 0;
-          for ( int n = 0; n < 4; ++n ) {
-            p += lms.history[n] * lms.weights[n];
-          }
-          p >>= 13;
+          }();
 
           // [5] The final sample is p + r, clamped to the signed 16-bit range.
-          output.push_back(
+          output[ch].push_back(
               static_cast<std::int16_t>(std::clamp(r + p, -32768, 32767)));
 
           // [6] The LMS weights are updated using the quantized and
@@ -215,14 +209,21 @@ std::optional<Qoa> Qoa::parse(std::istream &is) {
           for (std::size_t j = 0; j < 3; ++j) {
             lms.history[j] = lms.history[j + 1];
           }
-          lms.history[3] = output.back();
+          lms.history[3] = output[ch].back();
         }
       }
     }
   }
+  std::vector<int16_t> output_interleaved;
+  for (uint32_t i = 0; i < output[0].size(); i++) {
+    output_interleaved.push_back(output[0][i]);
+    if (*channel_count == 2) {
+      output_interleaved.push_back(output[1][i]);
+    }
+  }
 
-  std::cerr << "Samples read: " << output.size() << '\n';
-  return Qoa{.audio_frames = std::move(output),
+  std::cerr << "Samples read: " << output_interleaved.size() << '\n';
+  return Qoa{.audio_frames = std::move(output_interleaved),
              .sample_rate = last_frame.sample_rate,
              .nbr_channels = last_frame.channel_count};
 }
